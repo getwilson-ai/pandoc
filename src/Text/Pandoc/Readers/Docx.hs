@@ -776,11 +776,35 @@ bodyPartToBlocks (ListItem pPr numId lvl (Just levelInfo) parparts) = do
   -- We check whether this current numId has previously been used,
   -- since Docx expects us to pick up where we left off.
   listState <- gets docxListState
-  let startFromState = M.lookup (numId, lvl) listState
+  -- If we encounter level i+1 before seeing any level i item,
+  -- we should auto-increment the level i counter.
+  -- This handles cases like:
+  --   a) a  (level 1, but no level 0 seen yet)
+  --   b) b
+  --   2. B (level 0, should be item 2, not item 1)
+  let autoIncrementParentLevels state = case safeRead lvl :: Maybe Integer of
+        Just currentLevel | currentLevel > 0 -> 
+          -- Check all parent levels from currentLevel-1 down to 0
+          -- Initialize any missing parent levels to 1
+          -- This represents that we've implicitly seen the first parent item
+          let checkParentLevel acc levelNum
+                | levelNum < 0 = acc
+                | otherwise =
+                    let parentLevel = T.pack $ show levelNum
+                        parentKey = (numId, parentLevel)
+                    in case M.lookup parentKey acc of
+                      Nothing -> checkParentLevel (M.insert parentKey 1 acc) (levelNum - 1)
+                      Just _ -> checkParentLevel acc (levelNum - 1)  -- Continue checking even if parent exists
+          in checkParentLevel state (currentLevel - 1)
+        _ -> state  -- Level is not numeric or is 0, no parent to increment
+      updatedState = autoIncrementParentLevels listState
+      startFromState = M.lookup (numId, lvl) updatedState
       Level _ fmt txt startFromLevelInfo = levelInfo
-      start = case startFromState of
-        Just n -> n + 1
-        Nothing -> fromMaybe 1 startFromLevelInfo
+      start = case (startFromState, startFromLevelInfo) of
+        (Just n, Just docStart) -> max (n + 1) docStart  -- Use the larger of state+1 or document start
+        (Just n, Nothing) -> n + 1  -- Only state available, increment it
+        (Nothing, Just docStart) -> docStart  -- Only document start available, use it
+        (Nothing, Nothing) -> 1  -- Neither available, default to 1
       kvs = [ ("level", lvl)
             , ("num-id", numId)
             , ("format", fmt)
@@ -791,7 +815,7 @@ bodyPartToBlocks (ListItem pPr numId lvl (Just levelInfo) parparts) = do
     -- expire all the continuation data for lists of level > this one:
     -- a new level 1 list item resets continuation for level 2+
     let notExpired (_, lvl') _ = lvl' <= lvl
-    in M.insert (numId, lvl) start (M.filterWithKey notExpired listState) }
+    in M.insert (numId, lvl) start (M.filterWithKey notExpired updatedState) }
   blks <- bodyPartToBlocks (Paragraph pPr parparts)
   return $ divWith ("", ["list-item"], kvs) blks
 bodyPartToBlocks (ListItem pPr _ _ _ parparts) =
