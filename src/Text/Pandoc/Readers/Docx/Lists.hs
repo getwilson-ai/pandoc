@@ -50,6 +50,17 @@ getText :: Block -> Maybe T.Text
 getText (Div (_, _, kvs) _) = lookup "text" kvs
 getText _                   = Nothing
 
+getStart :: Block -> Maybe Int
+getStart (Div (_, _, kvs) _) = lookup "start" kvs >>= safeRead
+getStart _                   = Nothing
+
+getStartN :: Block -> Int
+getStartN b = fromMaybe 1 (getStart b)
+
+getHierNum :: Block -> Maybe T.Text
+getHierNum (Div (_, _, kvs) _) = lookup "hier-num" kvs
+getHierNum _                   = Nothing
+
 data ListType = Itemized | Enumerated ListAttributes
 
 listStyleMap :: [(T.Text, ListNumberStyle)]
@@ -131,8 +142,19 @@ flatToBullets' num xs@(b : elems) =
              Nothing -> b) : flatToBullets' num elems
      else case getListType b of
             Just (Enumerated attr) ->
-              OrderedList attr (separateBlocks $ flatToBullets' bLevel children) :
-              flatToBullets' num remaining
+              let orderedList = OrderedList attr (separateBlocks $ flatToBullets' bLevel children)
+                  -- For nested lists (level > 0), wrap in a Div with the parent prefix
+                  -- This allows writers to customize hierarchical numbering
+                  wrappedList = case (bLevel > 0, getHierNum b) of
+                    (True, Just hierNum) ->
+                      -- Extract parent prefix (everything before the last dot-separated number)
+                      let parts = T.splitOn "." hierNum
+                          parentPrefix = if length parts > 1
+                                         then T.intercalate "." (init parts) <> "."
+                                         else ""
+                      in Div ("", ["hier-list"], [("parent-prefix", parentPrefix)]) [orderedList]
+                    _ -> orderedList
+              in wrappedList : flatToBullets' num remaining
             _ ->
               BulletList (separateBlocks $ flatToBullets' bLevel children) :
               flatToBullets' num remaining

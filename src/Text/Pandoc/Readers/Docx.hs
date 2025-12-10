@@ -805,11 +805,22 @@ bodyPartToBlocks (ListItem pPr numId lvl (Just levelInfo) parparts) = do
         (Just n, Nothing) -> n + 1  -- Only state available, increment it
         (Nothing, Just docStart) -> docStart  -- Only document start available, use it
         (Nothing, Nothing) -> 1  -- Neither available, default to 1
+      -- Build the hierarchical number string (e.g., "2.1" for level 1 under parent 2)
+      -- by collecting all parent level counters and the current counter
+      hierNum = case safeRead lvl :: Maybe Integer of
+        Just currentLevel ->
+          let counters = [ M.lookup (numId, T.pack (show l)) updatedState
+                         | l <- [0 .. currentLevel - 1] ]
+              -- Include parent counters and current start
+              allNums = map (fromMaybe 1) counters ++ [start]
+          in T.intercalate "." (map tshow allNums)
+        Nothing -> tshow start
       kvs = [ ("level", lvl)
             , ("num-id", numId)
             , ("format", fmt)
             , ("text", txt)
             , ("start", tshow start)
+            , ("hier-num", hierNum)  -- Full hierarchical number like "2.1"
             ]
   modify $ \st -> st{ docxListState =
     -- expire all the continuation data for lists of level > this one:
